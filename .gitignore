@@ -3,3 +3,4 @@ prj
 *.vcd
 *.view
 dfx_runtime.txt
+vivado_pid11716.str
