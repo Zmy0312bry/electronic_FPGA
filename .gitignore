@@ -4,3 +4,4 @@ prj
 *.view
 dfx_runtime.txt
 *.str
+*.csv
