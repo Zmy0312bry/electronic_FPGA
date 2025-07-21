@@ -202,7 +202,7 @@ module fft_process (
                                     $signed(sample_buffer[fft_data_count]));
                         end
                         
-                        // 直接传入16位ADC数据，虚部为0
+                        // 直接传入16位ADC数据
                         fft_data_in <= {16'h0000, sample_buffer[fft_data_count]};
                         fft_data_valid <= 1'b1;
                         
