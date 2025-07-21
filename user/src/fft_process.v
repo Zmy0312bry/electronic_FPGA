@@ -21,7 +21,7 @@ module fft_process (
     output reg [27:0] magnitude,        // FFT幅度输出 Q13.15格式
     output reg [26:0] real_part,        // FFT实部输出 Q12.15格式
     output reg [26:0] imag_part,        // FFT虚部输出 Q12.15格式
-    output reg [9:0] bin_index,         // 当前频率点索引 (0-1023)
+    output reg [10:0] bin_index,        // 当前频率点索引 (0-2047)
     output reg magnitude_valid,         // 幅度数据有效信号
     output reg processing_done,         // 处理完成信号
     output reg ready_for_data           // 准备接收数据信号
@@ -30,22 +30,22 @@ module fft_process (
     // ============================================
     // 参数定义
     // ============================================
-    parameter FFT_SIZE = 1024;           // FFT点数
-    parameter TOTAL_SAMPLES = 1200;      // 总采样点数
-    parameter DISCARD_FRONT = 100;       // 丢弃前面的采样点数
+    parameter FFT_SIZE = 2048;           // FFT点数
+    parameter TOTAL_SAMPLES = 2400;      // 总采样点数
+    parameter DISCARD_FRONT = 200;       // 丢弃前面的采样点数
     parameter SYS_CLK_FREQ = 1_000_000;  // 系统时钟频率 1MHz
     
     // ============================================
     // 内部信号定义
     // ============================================
     // 采样控制
-    reg [10:0] sample_count;             // 总采样计数器 (0-1199)
-    reg [9:0] buffer_index;              // 缓存索引计数器 (0-1023)
-    reg [9:0] fft_data_count;            // FFT数据计数器 (0-1023)
+    reg [11:0] sample_count;             // 总采样计数器 (0-2399)
+    reg [10:0] buffer_index;             // 缓存索引计数器 (0-2047)
+    reg [10:0] fft_data_count;           // FFT数据计数器 (0-2047)
     reg fft_input_done;                  // FFT输入完成标志
     
     // 数据缓存 - 仅使用一个缓存数组
-    reg [15:0] sample_buffer [0:FFT_SIZE-1];  // 采样缓存
+    reg [15:0] sample_buffer [0:FFT_SIZE-1];  // 采样缓存 - 2048点
     
     // FFT接口信号
     reg [15:0] fft_config_data;          // FFT配置数据
@@ -63,8 +63,8 @@ module fft_process (
     reg fft_out_ready;                   // FFT输出数据准备接收
     
     // FFT结果存储
-    reg [26:0] fft_real [0:FFT_SIZE-1];  // FFT实部 Q12.15
-    reg [26:0] fft_imag [0:FFT_SIZE-1];  // FFT虚部 Q12.15
+    reg [26:0] fft_real [0:FFT_SIZE-1];  // FFT实部 Q12.15 - 2048点
+    reg [26:0] fft_imag [0:FFT_SIZE-1];  // FFT虚部 Q12.15 - 2048点
     
     // 幅度计算用的临时变量
     reg [26:0] abs_real, abs_imag;
@@ -113,11 +113,11 @@ module fft_process (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state <= IDLE;
-            sample_count <= 11'd0;
-            buffer_index <= 10'd0;
-            fft_data_count <= 10'd0;
+            sample_count <= 12'd0;
+            buffer_index <= 11'd0;
+            fft_data_count <= 11'd0;
             fft_input_done <= 1'b0;
-            bin_index <= 10'd0;
+            bin_index <= 11'd0;
             magnitude <= 28'd0;
             real_part <= 27'd0;
             imag_part <= 27'd0;
@@ -134,8 +134,8 @@ module fft_process (
                 IDLE: begin
                     if (enable) begin
                         state <= SAMPLING;
-                        sample_count <= 11'd0;
-                        buffer_index <= 10'd0;
+                        sample_count <= 12'd0;
+                        buffer_index <= 11'd0;
                         fft_input_done <= 1'b0;
                         processing_done <= 1'b0;
                         ready_for_data <= 1'b1;  // 准备接收数据
@@ -148,12 +148,12 @@ module fft_process (
                     ready_for_data <= 1'b1;
                     
                     if (adc_valid) begin  // 当外部提供有效数据时采样
-                        // 只保存第100到第1123个样本（即中间1024个样本）
+                        // 只保存第200到第2247个样本（即中间2048个样本）
                         if (sample_count >= DISCARD_FRONT && sample_count < (DISCARD_FRONT + FFT_SIZE)) begin
                             sample_buffer[buffer_index] <= adc_input;
                             
                             // 调试信息：检查存储的ADC数据
-                            if (buffer_index % 100 == 0 || buffer_index < 10) begin
+                            if (buffer_index % 200 == 0 || buffer_index < 10) begin
                                 $display("Saving ADC data: buffer[%d] = 0x%h (%d)", 
                                         buffer_index, adc_input, $signed(adc_input));
                             end
@@ -161,7 +161,7 @@ module fft_process (
                             buffer_index <= buffer_index + 1'b1;
                         end
                         
-                        // 采样1200个点后停止
+                        // 采样2400个点后停止
                         if (sample_count >= TOTAL_SAMPLES - 1) begin
                             state <= FFT_CONFIG;  // 直接进入FFT配置阶段
                             ready_for_data <= 1'b0;  // 停止接收数据
@@ -189,14 +189,14 @@ module fft_process (
                 
                 FFT_PREPARE: begin
                     state <= FFT_INPUT;
-                    fft_data_count <= 10'd0;
+                    fft_data_count <= 11'd0;
                 end
                 
                 FFT_INPUT: begin
                     // 防止循环传参：只有当前一次传输完成且未标记完成时才传输
                     if (!fft_input_done && fft_data_ready && fft_data_count < FFT_SIZE) begin
                         // 检查采样缓冲区中的数据并输出
-                        if (fft_data_count % 100 == 0 || fft_data_count < 10) begin
+                        if (fft_data_count % 200 == 0 || fft_data_count < 10) begin
                             $display("FFT Input Check: data[%d] = 0x%h (%d)", 
                                     fft_data_count, sample_buffer[fft_data_count], 
                                     $signed(sample_buffer[fft_data_count]));
@@ -206,7 +206,7 @@ module fft_process (
                         fft_data_in <= {16'h0000, sample_buffer[fft_data_count]};
                         fft_data_valid <= 1'b1;
                         
-                        // 只有最后一个数据点(count=1023)才置last信号
+                        // 只有最后一个数据点(count=2047)才置last信号
                         if (fft_data_count == FFT_SIZE - 1) begin
                             fft_data_last <= 1'b1;
                             fft_input_done <= 1'b1;  // 标记输入完成
@@ -258,7 +258,7 @@ module fft_process (
                         // 接收到最后一个数据点或达到FFT_SIZE-1
                         if (fft_out_last || fft_data_count >= FFT_SIZE - 1) begin
                             state <= MAG_CALC;
-                            bin_index <= 10'd0;
+                            bin_index <= 11'd0;
                             fft_out_ready <= 1'b0;  // 停止接收更多数据
                         end else begin
                             fft_data_count <= fft_data_count + 1'b1;
