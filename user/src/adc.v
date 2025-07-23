@@ -1,7 +1,7 @@
 module adc (
     input wire clk,              // System clock
     input wire rst_n,            // Active low reset
-    input wire [15:0] adc_data,  // ADC input data (16-bit Q1.15 format)
+    input wire [7:0] adc_data,  // ADC input data (8bit accordding to the hardware)
     input wire adc_clk,          // ADC sampling clock
     output reg [15:0] data_out,  // Processed ADC data (16-bit Q1.15 format)
     output reg data_valid        // Data valid signal
@@ -9,6 +9,7 @@ module adc (
 
 // Parameters for sampling
 parameter BUFFER_DEPTH = 2048;
+parameter ADC_OFFSET = 8'd128;  // ADC的偏置
 
 // Internal signals
 reg [15:0] sample_buffer [0:BUFFER_DEPTH-1];
@@ -17,6 +18,10 @@ integer i;
 
 // 汉宁窗系数数组 (2048点)
 reg [15:0] hanning_window [0:BUFFER_DEPTH-1];
+
+// 8位ADC到16位Q1.15的转换中间信号
+reg [7:0] adc_data_offset;
+reg [15:0] adc_data_q1_15;
 
 // 初始化汉宁窗系数
 initial begin
@@ -275,9 +280,9 @@ initial begin
     // 索引 1008-1015
     hanning_window[1008] = 16'h7FED; hanning_window[1009] = 16'h7FF0; hanning_window[1010] = 16'h7FF2; hanning_window[1011] = 16'h7FF4; hanning_window[1012] = 16'h7FF6; hanning_window[1013] = 16'h7FF7; hanning_window[1014] = 16'h7FF9; hanning_window[1015] = 16'h7FFA; 
     // 索引 1016-1023
-    hanning_window[1016] = 16'h7FFC; hanning_window[1017] = 16'h7FFD; hanning_window[1018] = 16'h7FFE; hanning_window[1019] = 16'h7FFE; hanning_window[1020] = 16'h7FFF; hanning_window[1021] = 16'h8000; hanning_window[1022] = 16'h8000; hanning_window[1023] = 16'h8000; 
+    hanning_window[1016] = 16'h7FFC; hanning_window[1017] = 16'h7FFD; hanning_window[1018] = 16'h7FFE; hanning_window[1019] = 16'h7FFE; hanning_window[1020] = 16'h7FFF; hanning_window[1021] = 16'h7FFF; hanning_window[1022] = 16'h7FFF; hanning_window[1023] = 16'h7FFF; 
     // 索引 1024-1031
-    hanning_window[1024] = 16'h8000; hanning_window[1025] = 16'h8000; hanning_window[1026] = 16'h8000; hanning_window[1027] = 16'h7FFF; hanning_window[1028] = 16'h7FFE; hanning_window[1029] = 16'h7FFE; hanning_window[1030] = 16'h7FFD; hanning_window[1031] = 16'h7FFC; 
+    hanning_window[1024] = 16'h7FFF; hanning_window[1025] = 16'h7FFF; hanning_window[1026] = 16'h7FFF; hanning_window[1027] = 16'h7FFF; hanning_window[1028] = 16'h7FFE; hanning_window[1029] = 16'h7FFE; hanning_window[1030] = 16'h7FFD; hanning_window[1031] = 16'h7FFC; 
     // 索引 1032-1039
     hanning_window[1032] = 16'h7FFA; hanning_window[1033] = 16'h7FF9; hanning_window[1034] = 16'h7FF7; hanning_window[1035] = 16'h7FF6; hanning_window[1036] = 16'h7FF4; hanning_window[1037] = 16'h7FF2; hanning_window[1038] = 16'h7FF0; hanning_window[1039] = 16'h7FED; 
     // 索引 1040-1047
@@ -542,14 +547,24 @@ always @(posedge adc_clk or negedge rst_n) begin
     if (!rst_n) begin
         write_ptr <= 0;
         data_valid <= 1'b0;
+        adc_data_offset <= 8'd0;
+        adc_data_q1_15 <= 16'd0;
         for (i = 0; i < BUFFER_DEPTH; i = i + 1) begin
             sample_buffer[i] <= 16'd0;
         end
     end else begin
-        // 应用汉宁窗 - 将ADC数据与相应位置的窗函数系数相乘
-        windowed_value = $signed(adc_data) * $signed(hanning_window[write_ptr]);
+        // 1. 减去ADC偏置值
+        adc_data_offset <= adc_data - ADC_OFFSET;
+
+        // 2. 转换为Q1.15格式 (左移7位)
+        // 对于8位有符号数，需要符号扩展到16位，然后左移7位
+        adc_data_q1_15 <= {{8{adc_data_offset[7]}}, adc_data_offset} << 7;
+
+        // 3. 应用汉宁窗 - 将ADC数据与相应位置的窗函数系数相乘
+        // 直接使用当前周期的值，以确保数据处理的连续性
+        windowed_value <= $signed($signed({{8{adc_data[7]}}, (adc_data - ADC_OFFSET)}) << 7) * $signed(hanning_window[write_ptr]);
         
-        // 存储加窗后的采样数据 (取乘积的高16位，相当于右移15位)
+        // 4. 存储加窗后的采样数据 (取乘积的高16位，相当于右移15位)
         sample_buffer[write_ptr] <= windowed_value[30:15];
         
         // 更新写指针
@@ -563,7 +578,8 @@ always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         data_out <= 16'd0;
     end else if (data_valid) begin
-        data_out <= sample_buffer[write_ptr];
+        // 读取之前已处理的数据，而不是当前正在写入的位置
+        data_out <= sample_buffer[(write_ptr == 0) ? (BUFFER_DEPTH-1) : (write_ptr-1)];
     end
 end
 
