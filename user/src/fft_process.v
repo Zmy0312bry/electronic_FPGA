@@ -132,7 +132,9 @@ module fft_process (
         end else begin
             case (state)
                 IDLE: begin
-                    if (enable) begin
+                    ready_for_data <= 1'b0;     // 默认不接收数据
+                    magnitude_valid <= 1'b0;     // 清除幅度有效信号
+                    if (enable && !processing_done) begin  // 只有在未处理完成时才响应enable
                         state <= SAMPLING;
                         sample_count <= 12'd0;
                         buffer_index <= 11'd0;
@@ -140,7 +142,6 @@ module fft_process (
                         processing_done <= 1'b0;
                         ready_for_data <= 1'b1;  // 准备接收数据
                     end
-                    magnitude_valid <= 1'b0;
                 end
                 
                 SAMPLING: begin
@@ -148,6 +149,10 @@ module fft_process (
                     ready_for_data <= 1'b1;
                     
                     if (adc_valid) begin  // 当外部提供有效数据时采样
+                        // 添加调试信息
+                        $display("DEBUG: Received valid ADC data at time %t: 0x%h (%d)", 
+                                $time, adc_input, $signed(adc_input));
+                                
                         // 只保存第200到第2247个样本（即中间2048个样本）
                         if (sample_count >= DISCARD_FRONT && sample_count < (DISCARD_FRONT + FFT_SIZE)) begin
                             sample_buffer[buffer_index] <= adc_input;
@@ -297,8 +302,10 @@ module fft_process (
                 
                 DONE: begin
                     processing_done <= 1'b1;
+                    ready_for_data <= 1'b0;  // 确保不会再次采样
                     if (!enable) begin
                         state <= IDLE;
+                        processing_done <= 1'b0;  // 清除完成标志，等待下一次使能
                     end
                 end
                 

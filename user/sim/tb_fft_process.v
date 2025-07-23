@@ -38,7 +38,7 @@ module tb_fft_process();
 
     // 采样控制信号
     reg adc_valid;                          // ADC数据有效信号
-    reg [7:0] sample_div_counter;           // 采样分频计数器
+    reg [11:0] sample_count;                // 采样点计数器（0~2399）
     wire ready_for_data;                    // FFT模块准备接收数据信号
 
     // ============================================
@@ -82,70 +82,33 @@ module tb_fft_process();
     always @(posedge clk) begin
         if (!rst_n) begin
             time_counter <= 32'd0;
-            adc_input <= 16'h0000;  // q1.15格式的0值
+            adc_input <= 16'h0000;
             sin_value <= 0.0;
             adc_valid <= 1'b0;
-            sample_div_counter <= 8'd0;
-        end
-        else begin
-            // 每个时钟周期都更新信号值（模拟连续的模拟信号）
-            // 明确使用阻塞赋值计算中间值，确保即时更新
-            time_ns = time_counter * CLK_PERIOD;
-            //sin_value = 1.0 * $sin(2.0 * 3.14159265 * SIN_FREQ * time_ns / 1000000000.0);
-            // 调试输出，每1000个时钟周期显示一次
-            //if (time_counter % 1000 == 0) begin
-            //    $display("DEBUG: time_counter=%d, time_ns=%f, sin_value=%f, adc_value=%d",
-            //             time_counter, time_ns, sin_value, $rtoi(sin_value * 32767));
-            //end
-
-            period_ns = 1000000000.0 / SIN_FREQ;  // 周期时间(ns)
-            phase = (time_ns / period_ns);
-            phase = phase - $floor(phase);  // 只保留小数部分(0到1)
-
-            // 三角波计算 (幅值为1.0)
-            if (phase < 0.5)
-                sin_value = -1.0 + 4.0 * phase;  // -1到1的上升斜坡
-            else
-                sin_value = 3.0 - 4.0 * phase;   // 1到-1的下降斜坡
-
-            // 调试输出，每1000个时钟周期显示一次
-            if (time_counter % 1000 == 0) begin
-                $display("DEBUG: time_counter=%d, time_ns=%f, triangle_value=%f, adc_value=%d",
-                         time_counter, time_ns, sin_value, $rtoi(sin_value * 32767));
-            end
-
-
-            // 将正弦值转换为ADC值 (-32768 to 32767)
-            adc_input <= $rtoi(sin_value * 32767);
-            time_counter <= time_counter + 32'd1;  // 确保递增
-
-            // 采样率控制：只在FFT模块准备接收数据时进行采样控制
-            if (ready_for_data) begin
-                // 1MHz / 500kHz = 2，所以每2个时钟周期标记一次有效数据
-                if (sample_div_counter >= 8'd1) begin
-                    sample_div_counter <= 8'd0;
-                    adc_valid <= 1'b1;  // 标记数据有效
-
-                    // 打印采样信息，包括实际ADC值和sin值
-                    $display("ADC Sample %d: time=%0t ns, adc_input=0x%h (%d), sin_value=%f",
-                             u_dut.sample_count + 1, $time, adc_input, $signed(adc_input), sin_value);
-
-                    // 检查采样值是否为零
-                    if (adc_input == 16'h0000) begin
-                        $display("WARNING: adc_input is zero at sample %d (time=%0t ns)",
-                                 u_dut.sample_count + 1, $time);
-                    end
+            sample_count <= 12'd0;
+        end else begin
+            // 采样2400点，采样期间每个clk周期都送adc_valid=1
+            if (ready_for_data && sample_count < 12'd2400) begin
+                time_ns = time_counter * CLK_PERIOD;
+                period_ns = 1000000000.0 / SIN_FREQ;
+                phase = (time_ns / period_ns);
+                phase = phase - $floor(phase);
+                // 三角波
+                if (phase < 0.5)
+                    sin_value = -1.0 + 4.0 * phase;
+                else
+                    sin_value = 3.0 - 4.0 * phase;
+                adc_input <= $rtoi(sin_value * 32767);
+                adc_valid <= 1'b1;
+                time_counter <= time_counter + 32'd1;
+                sample_count <= sample_count + 1'b1;
+                if (sample_count % 100 == 0) begin
+                    $display("Sampling: %d/2400, adc_input=0x%h (%d)", sample_count, adc_input, $signed(adc_input));
                 end
-                else begin
-                    sample_div_counter <= sample_div_counter + 1'b1;
-                    adc_valid <= 1'b0;  // 数据无效
-                end
-            end
-            else begin
+            end else begin
                 adc_valid <= 1'b0;
-                sample_div_counter <= 8'd0;  // 重置计数器
-            end
         end
+    end
     end
 
     // ============================================
@@ -359,13 +322,6 @@ module tb_fft_process();
             $display("FFT Config: valid=%b, ready=%b, data=0x%h",
                      u_dut.fft_config_valid, u_dut.fft_config_ready, u_dut.fft_config_data);
         end
-
-        // DATA_COPY状态已移除，不再需要监控
-        /*if (u_dut.state == 4'b0010) begin  // DATA_COPY状态
-            if (u_dut.copy_index % 256 == 0) begin
-                $display("Data copy progress: %d/1024", u_dut.copy_index);
-            end
-        }*/
 
         if (magnitude_valid) begin
             $display("DEBUG: magnitude_valid detected! bin_index=%d, magnitude=0x%h, real=0x%h, imag=0x%h",

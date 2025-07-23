@@ -17,7 +17,7 @@ reg [$clog2(BUFFER_DEPTH)-1:0] write_ptr;
 integer i;
 
 // 汉宁窗系数数组 (2048点)
-reg [15:0] hanning_window [0:BUFFER_DEPTH-1];
+reg signed [15:0] hanning_window [0:BUFFER_DEPTH-1];
 
 // 8位ADC到16位Q1.15的转换中间信号
 reg [7:0] adc_data_offset;
@@ -539,8 +539,12 @@ initial begin
     hanning_window[2040] = 16'h0004; hanning_window[2041] = 16'h0003; hanning_window[2042] = 16'h0002; hanning_window[2043] = 16'h0001; hanning_window[2044] = 16'h0001; hanning_window[2045] = 16'h0000; hanning_window[2046] = 16'h0000; hanning_window[2047] = 16'h0000; 
 end
 
-// 窗函数应用中间信号
-reg [31:0] windowed_value;
+// 首先将ADC数据处理成有符号数，减去偏置并进行符号扩展
+reg signed [7:0] adc_offset_corrected;
+reg signed [15:0] adc_q1_15;
+// 乘积结果应为32位有符号数
+reg signed [31:0] windowed_value;
+reg signed [15:0] windowed_value_rounded;
 
 // Sample buffer management with window function application
 always @(posedge adc_clk or negedge rst_n) begin
@@ -553,23 +557,27 @@ always @(posedge adc_clk or negedge rst_n) begin
             sample_buffer[i] <= 16'd0;
         end
     end else begin
-        // 1. 减去ADC偏置值
-        adc_data_offset <= adc_data - ADC_OFFSET;
+        // 1. 减去ADC偏置值, 得到8位有符号数
+        adc_offset_corrected <= adc_data - ADC_OFFSET;
 
-        // 2. 转换为Q1.15格式 (左移7位)
-        // 对于8位有符号数，需要符号扩展到16位，然后左移7位
-        adc_data_q1_15 <= {{8{adc_data_offset[7]}}, adc_data_offset} << 7;
+        // 2. 转换为Q1.15格式 (符号扩展到16位, 然后左移8位以最大化精度)
+        adc_q1_15 <= {adc_offset_corrected, 8'b0};
 
         // 3. 应用汉宁窗 - 将ADC数据与相应位置的窗函数系数相乘
-        // 直接使用当前周期的值，以确保数据处理的连续性
-        windowed_value <= $signed($signed({{8{adc_data[7]}}, (adc_data - ADC_OFFSET)}) << 7) * $signed(hanning_window[write_ptr]);
+        // Q1.15 * Q1.15 = Q2.30
+        windowed_value <= adc_q1_15 * hanning_window[write_ptr];
         
         // 4. 存储加窗后的采样数据 (取乘积的高16位，相当于右移15位)
-        sample_buffer[write_ptr] <= windowed_value[30:15];
+        // Q2.30 -> Q1.15. 添加舍入操作以提高精度
+        windowed_value_rounded <= (windowed_value >>> 15) + windowed_value[14];
+        sample_buffer[write_ptr] <= windowed_value_rounded;
         
         // 更新写指针
         write_ptr <= (write_ptr + 1) % BUFFER_DEPTH;
-        data_valid <= 1'b1;  // Set valid after first sample
+        
+        // 仅在有实际数据可用时将data_valid设置为高
+        // 在接收到有效数据后设置有效标志
+        data_valid <= (adc_data != 8'd0);
     end
 end
 
@@ -580,6 +588,11 @@ always @(posedge clk or negedge rst_n) begin
     end else if (data_valid) begin
         // 读取之前已处理的数据，而不是当前正在写入的位置
         data_out <= sample_buffer[(write_ptr == 0) ? (BUFFER_DEPTH-1) : (write_ptr-1)];
+        // 添加调试信息，查看数据输出
+        $display("DEBUG: ADC output data: %h (%d) at time %t", 
+                 sample_buffer[(write_ptr == 0) ? (BUFFER_DEPTH-1) : (write_ptr-1)], 
+                 $signed(sample_buffer[(write_ptr == 0) ? (BUFFER_DEPTH-1) : (write_ptr-1)]), 
+                 $time);
     end
 end
 
