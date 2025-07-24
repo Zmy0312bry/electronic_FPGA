@@ -36,10 +36,6 @@ module tb_signal_separate_two;
     wire fft_ready_for_data;            // FFT准备接收数据
 
     // 添加FFT内部状态监控信号
-    wire [3:0] fft_state;               // FFT状态机状态
-    wire [11:0] fft_sample_count;       // FFT采样计数
-    wire [10:0] fft_buffer_index;       // FFT缓存索引
-    wire [10:0] fft_data_count;         // FFT数据计数
     wire fft_input_done;                // FFT输入完成
     wire fft_config_valid;              // FFT配置有效
     wire fft_config_ready;              // FFT配置就绪
@@ -47,6 +43,14 @@ module tb_signal_separate_two;
     wire fft_data_ready;                // FFT数据就绪
     wire fft_out_valid;                 // FFT输出有效
     wire fft_out_ready;                 // FFT输出就绪
+
+    assign fft_config_valid = u_fft_process.fft_config_valid;
+    assign fft_input_done = u_fft_process.fft_input_done;
+    assign fft_config_ready= u_fft_process.fft_config_ready;
+    assign fft_data_valid = u_fft_process.fft_data_valid;
+    assign fft_data_ready = u_fft_process.fft_data_ready;
+    assign fft_out_valid = u_fft_process.fft_out_valid;
+    assign fft_out_ready = u_fft_process.fft_out_ready;
 
     // 仿真计数器
     integer sample_idx = 0;
@@ -59,7 +63,6 @@ module tb_signal_separate_two;
     real triangle_amp = 30.0;           // 三角波幅度
     real time_step;                     // 时间步长
     real adc_temp_value;                // 添加中间实数变量
-    real frequency;                     // 声明frequency变量
     real phase, tri_phase;              // 三角波计算用相位变量
 
     // 初始化
@@ -165,18 +168,6 @@ module tb_signal_separate_two;
     end
 
 
-    // 添加调试信息 - 监控ADC输出和FFT输入信号
-    always @(posedge clk) begin
-        if (adc_out_valid) begin
-            $display("DEBUG: ADC output valid at time %t - Data=%h (%d)",
-                     $time, adc_out, $signed(adc_out));
-
-            // 在ADC输出有效时将数据写入文件
-            $fwrite(file_adc, "%d,%f,%d,%h,%d\n",
-                    sample_idx, $time/1000.0, adc_data, adc_out, $signed(adc_out));
-        end
-    end
-
     // 监控FFT处理模块的状态
     reg [3:0] prev_fft_state;
     reg fft_config_valid_prev;
@@ -236,23 +227,6 @@ module tb_signal_separate_two;
         fft_config_valid_prev <= u_fft_process.fft_config_valid;
     end
 
-    // 监控FFT输入过程
-    always @(posedge clk) begin
-        if (u_fft_process.fft_data_valid && !fft_data_valid_prev) begin
-            $display("FFT Input started: first data=0x%h at time %t", u_fft_process.fft_data_in, $time);
-        end
-        if (u_fft_process.fft_data_valid && u_fft_process.fft_data_ready) begin
-            if (u_fft_process.fft_data_count % 256 == 0 || u_fft_process.fft_data_count < 5) begin
-                $display("FFT Input progress: count=%d/%d, data=0x%h, last=%b",
-                         u_fft_process.fft_data_count, 2048, u_fft_process.fft_data_in, u_fft_process.fft_data_last);
-            end
-        end
-        if (!u_fft_process.fft_data_valid && fft_data_valid_prev) begin
-            $display("FFT Input completed at time %t", $time);
-        end
-        fft_data_valid_prev <= u_fft_process.fft_data_valid;
-    end
-
     // 监控FFT输出过程
     always @(posedge clk) begin
         if (u_fft_process.fft_out_valid && !fft_out_valid_prev) begin
@@ -307,11 +281,6 @@ module tb_signal_separate_two;
 
     // 添加错误检查和深度调试
     always @(posedge clk) begin
-        // 检查FFT模块是否卡在某个状态
-        if (enable && u_fft_process.state == prev_fft_state) begin
-            // 记录在同一状态停留的时间
-            // 这里只是简单的检查，可以根据需要扩展
-        end
 
         // 检查ADC数据是否正确传递到FFT模块
         if (adc_out_valid && fft_ready_for_data) begin
@@ -368,24 +337,6 @@ module tb_signal_separate_two;
         end
     end
 
-    // 监控关键数据值
-    always @(posedge clk) begin
-        // 检查ADC输入是否为零
-        if (adc_out_valid && adc_out == 16'h0000) begin
-            $display("WARNING: ADC output is zero at sample %d, time %t", sample_idx, $time);
-        end
-
-        // 检查FFT结果是否为零
-        if (fft_magnitude_valid && fft_magnitude == 28'h0000000) begin
-            $display("WARNING: FFT magnitude is zero at bin %d", fft_bin_index);
-        end
-
-        // 报告非零的幅度值（前几个和大的值）
-        if (fft_magnitude_valid && (fft_bin_index < 10 || fft_magnitude > 28'h1000000)) begin
-            $display("INFO: Significant magnitude at bin %d: 0x%h (freq=%.2f kHz)",
-                     fft_bin_index, fft_magnitude, fft_bin_index * (SAMPLE_FREQ * 1.0 / 2048) / 1000);
-        end
-    end
 
     // 实例化ADC模块
     adc u_adc (

@@ -256,17 +256,14 @@ module fft_process (
                         fft_real[fft_data_count] <= fft_data_out[26:0];
                         fft_imag[fft_data_count] <= fft_data_out[58:32];
                         
-                        // 添加调试信息
-                        $display("DEBUG: FFT Output at point %d: Real=0x%h, Imag=0x%h", 
-                                fft_data_count, fft_data_out[26:0], fft_data_out[58:32]);
-                        
                         // 接收到最后一个数据点或达到FFT_SIZE-1
                         if (fft_out_last || fft_data_count >= FFT_SIZE - 1) begin
                             state <= MAG_CALC;
                             bin_index <= 11'd0;
-                            fft_out_ready <= 1'b0;  // 停止接收更多数据
-                        end else begin
-                            fft_data_count <= fft_data_count + 1'b1;
+                            fft_out_ready <= 1'd0;  // 停止接收更多数据
+                        end 
+                        else begin
+                            fft_data_count <= fft_data_count + 11'd1;
                         end
                     end
                 end
@@ -288,15 +285,11 @@ module fft_process (
                         magnitude <= {1'b0, abs_real} + {1'b0, abs_imag};
                         magnitude_valid <= 1'b1;
                         
-                        // 添加调试信息
-                        $display("DEBUG: MAG_CALC bin_index=%d, real=0x%h, imag=0x%h, magnitude=0x%h", 
-                                bin_index, fft_real[bin_index], fft_imag[bin_index], 
-                                {1'b0, abs_real} + {1'b0, abs_imag});
-                        
-                        bin_index <= bin_index + 1'b1;
+                        bin_index <= bin_index + 11'b1;
                     end else begin
                         state <= DONE;
                         magnitude_valid <= 1'b0;
+                        bin_index <= bin_index + 11'b1;  // 重置索引
                     end
                 end
                 
